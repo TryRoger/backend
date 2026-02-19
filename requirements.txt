@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+pillow
+google-generativeai
+firebase-admin
+stripe
+python-multipart

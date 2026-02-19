@@ -1,0 +1,6 @@
+roger-192cd-firebase-adminsdk-fbsvc-49373d98ba.json
+*.env
+.env
+trial/
+.venv/
+__pycache__/
