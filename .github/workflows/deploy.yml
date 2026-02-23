@@ -28,4 +28,4 @@ jobs:
           gcloud compute ssh --zone "us-central1-f" "instance-20260220-140252" \
             --project "sharp-leaf-451416-r4" \
             --quiet \
-            --command "cd ~/backend && git pull origin main && pip install -r requirements.txt && sudo systemctl restart fastapi-backend"
+            --command "cd /home/user/backend && git pull origin main && pip install -r requirements.txt && sudo systemctl restart fastapi-backend"
