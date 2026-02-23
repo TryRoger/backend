@@ -25,7 +25,8 @@ jobs:
 
       - name: Deploy to Compute Engine
         run: |
-          gcloud compute ssh --zone "us-central1-f" "instance-20260220-140252" \
+          gcloud compute ssh user@instance-20260220-140252 \
+            --zone "us-central1-f" \
             --project "sharp-leaf-451416-r4" \
             --quiet \
-            --command "sudo chown -R \$USER:\$USER /home/user/backend && cd /home/user/backend && eval \$(ssh-agent -s) && ssh-add ~/.ssh/id_* && git pull origin main && pip install -r requirements.txt && sudo systemctl restart fastapi-backend"
+            --command "sudo chown -R user:user /home/user/backend && cd /home/user/backend && eval \$(ssh-agent -s) && ssh-add /home/user/.ssh/id_ed25519 && git pull origin main && pip install -r requirements.txt && sudo systemctl restart fastapi-backend"
