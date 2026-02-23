@@ -31,9 +31,6 @@ from google import genai
 from google.genai import types
 
 
-from AppKit import NSScreen
-
-
 # --- Model Configuration ---
 MODEL = "gemini-3-flash-preview"
 
@@ -56,19 +53,6 @@ def ensure_trial_dir():
 client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY"),
 )
-
-
-
-def get_screen_info():
-    """Get screen dimensions using AppKit."""
-    main_screen = NSScreen.mainScreen()
-    frame = main_screen.frame()
-    return {
-        "width": frame.size.width,
-        "height": frame.size.height,
-        "scale": main_screen.backingScaleFactor(),
-    }
-    
 
 
 def convert_box2d_to_pixels(box_2d, img_width=1727, img_height=1116):
