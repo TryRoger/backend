@@ -29,4 +29,4 @@ jobs:
             --zone "us-central1-f" \
             --project "sharp-leaf-451416-r4" \
             --quiet \
-            --command "sudo chown -R user:user /home/user/backend && cd /home/user/backend && eval \$(ssh-agent -s) && ssh-add /home/user/.ssh/id_ed25519 && git pull origin main && source .venv/bin/activate && uv pip install -r requirements.txt && sudo systemctl restart fastapi-backend"
+            --command "sudo chown -R user:user /home/user/backend && cd /home/user/backend && eval \$(ssh-agent -s) && ssh-add /home/user/.ssh/id_ed25519 && git pull origin main && source .venv/bin/activate && /home/user/.local/bin/uv pip install -r requirements.txt && sudo systemctl restart fastapi-backend"
