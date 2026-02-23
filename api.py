@@ -19,6 +19,7 @@ Usage:
 import io
 import json
 import time
+import datetime
 import threading
 from typing import Optional, List
 
@@ -40,6 +41,9 @@ from speculation_planner import get_step1, get_box_only, generate_full_plan_bg
 
 # Load environment variables
 load_dotenv()
+
+# Server startup time for uptime tracking
+SERVER_START_TIME = time.time()
 
 # =============================================================================
 # DEBUG FLAG: Set to True to save original and segmented images to trial folder
@@ -179,7 +183,14 @@ class ExecuteStepResponse(BaseModel):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "model": MODEL}
+    uptime_seconds = time.time() - SERVER_START_TIME
+    return {
+        "status": "healthy",
+        "model": MODEL,
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "uptime_seconds": round(uptime_seconds, 2),
+        "uptime_human": f"{int(uptime_seconds // 3600)}h {int((uptime_seconds % 3600) // 60)}m {int(uptime_seconds % 60)}s"
+    }
 
 
 # =============================================================================
