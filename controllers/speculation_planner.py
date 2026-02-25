@@ -21,7 +21,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
-from speculation_cache import StepPlan
+from controllers.speculation_cache import StepPlan
 
 load_dotenv()
 
@@ -65,7 +65,7 @@ def get_step1(img_or_url, task: str) -> Dict[str, Any]:
     """
     prompt = f"""Task: "{task}"
 Find step 1 UI element. Return JSON only:
-{{"box_2d": [y0,x0,y1,x1], "info": "1-line action", "total_steps": N}}
+{{"box_2d": [y0,x0,y1,x1], "action": "user action 3-7 words" , "info": "2 line info about bounded box", "type":"click|drag|type|scroll" "total_steps": N}}
 box_2d should highlight region for visual guide with generous padding
 box_2d: 0-1000 scale, [y0,x0,y1,x1] format."""
 
@@ -102,9 +102,8 @@ def get_box_only(img_or_url, where: str) -> Dict[str, Any]:
     """
     prompt = f"""Where should user click for: "{where}"
 box_2d should highlight region for visual guide with generous padding
-JSON only: {{"box_2d": [y0,x0,y1,x1]}}, 
+JSON only: {{"box_2d": [y0,x0,y1,x1], "action": "user action 3-7 words" , "info": "2 line info about bounded box", "type":"click|drag|type|scroll" "total_steps": N}},
 0-1000 scale.
-
 """
 
     config = types.GenerateContentConfig(
@@ -124,6 +123,54 @@ JSON only: {{"box_2d": [y0,x0,y1,x1]}},
 # =============================================================================
 # BACKGROUND: Generate full plan (steps 2-N)
 # =============================================================================
+
+# =============================================================================
+# BACKGROUND: Check if task is complete
+# =============================================================================
+
+def is_task_complete(img_or_url, task: str) -> bool:
+    """
+    BACKGROUND: Check if the user's task has been completed.
+
+    Runs in parallel with step execution to detect task completion
+    instead of relying on estimated step counts.
+
+    Args:
+        img_or_url: Current screenshot
+        task: The user's original task description
+
+    Returns:
+        True if task appears complete, False otherwise
+    """
+    prompt = f"""Look at this screenshot and determine if the following task has been completed.
+
+TASK: "{task}"
+
+Answer with ONLY a JSON object:
+{{"complete": true}} or {{"complete": false}}
+
+Return true ONLY if the task is clearly finished and the goal has been achieved.
+Return false if the task is still in progress or not yet started."""
+
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0)
+    )
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=[prompt, _img_content(img_or_url)],
+        config=config
+    )
+
+    print(f"[Task Complete Check]: {response.text}")
+
+    try:
+        result = _parse_json(response.text)
+        return result.get("complete", False)
+    except Exception as e:
+        print(f"[Task Complete Check] Parse error: {e}")
+        return False
+
 
 def generate_full_plan_bg(
     img_or_url,
@@ -151,47 +198,25 @@ TASK: "{task}"
 TOTAL STEPS: {total_steps}
 STEP 1 (already identified): {step1_info}
 
-Generate steps 2 through {total_steps}. For each step:
-- step_number: The step number (2, 3, 4, etc.)
-- where: EXACT description of the UI element to interact with
-  - Be specific: "Safari icon in dock" not just "icon"
-  - Include location hints: "at bottom", "top-right corner", "in the menu bar"
-- info: Short 1-line description of the action to perform
-- action: One of: click, type, scroll, right_click, double_click
-- type_text: If action is "type", the exact text to enter (null otherwise)
+Generate steps 2 through {total_steps}. For each step, return JSON only with this exact format:
 
-IMPORTANT GUIDELINES:
-1. Each step should be ONE atomic action (one click, one text entry, etc.)
-2. Account for UI state changes between steps (menus opening, pages loading, etc.)
-3. Be realistic about what's visible on screen at each step
-4. Consider common UI patterns (dropdown menus, modal dialogs, form fields)
-
-Return a JSON array:
 [
-    {{
-        "step_number": 2,
-        "where": "URL/address bar at the top center of Safari window",
-        "info": "Click URL bar to focus it for typing",
-        "action": "click",
-        "type_text": null
-    }},
-    {{
-        "step_number": 3,
-        "where": "URL bar (now focused with cursor)",
-        "info": "Type the website address",
-        "action": "type",
-        "type_text": "uidai.gov.in"
-    }},
-    {{
-        "step_number": 4,
-        "where": "Search/Go button or press Enter",
-        "info": "Navigate to the website",
-        "action": "click",
-        "type_text": null
-    }}
+    {{"step_number": 2, "box_2d": [y0,x0,y1,x1], "action": "user action 3-7 words", "info": "2 line info about bounded box", "type": "click|drag|type|scroll", "total_steps": {total_steps}}},
+    {{"step_number": 3, "box_2d": [y0,x0,y1,x1], "action": "user action 3-7 words", "info": "2 line info about bounded box", "type": "click|drag|type|scroll", "total_steps": {total_steps}}}
 ]
 
-Think through the entire task flow before responding. Be thorough and precise."""
+FIELD DESCRIPTIONS:
+- step_number: The step number (2, 3, 4, etc.)
+- box_2d: Bounding box [y0,x0,y1,x1] in 0-1000 scale for the UI element. Use generous padding.
+- action: Short description of user action (3-7 words), e.g., "Click Safari icon in dock"
+- info: 2 line description about the bounded box element and what it does
+- type: One of: click, drag, type, scroll
+- total_steps: Always {total_steps}
+
+IMPORTANT:
+1. Each step should be ONE atomic action
+2. box_2d coordinates must be in 0-1000 scale
+3. Return ONLY valid JSON array, no other text"""
 
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_budget=0)
@@ -207,14 +232,33 @@ Think through the entire task flow before responding. Be thorough and precise.""
 
     steps_data = _parse_json(response.text)
 
-    # Convert to StepPlan objects
-    return [
-        StepPlan(
+    # Validate and convert to StepPlan objects
+    validated_steps = []
+    for s in steps_data:
+        # Enforce required fields
+        if "box_2d" not in s or not isinstance(s["box_2d"], list) or len(s["box_2d"]) != 4:
+            print(f"[BG] Warning: Invalid box_2d for step {s.get('step_number')}, skipping")
+            continue
+        if "action" not in s or not s["action"]:
+            print(f"[BG] Warning: Missing action for step {s.get('step_number')}, skipping")
+            continue
+        if "info" not in s or not s["info"]:
+            print(f"[BG] Warning: Missing info for step {s.get('step_number')}, skipping")
+            continue
+
+        # Validate type field
+        valid_types = {"click", "drag", "type", "scroll"}
+        step_type = s.get("type", "click")
+        if step_type not in valid_types:
+            step_type = "click"
+
+        validated_steps.append(StepPlan(
             step_number=s["step_number"],
-            where=s["where"],
+            box_2d=s["box_2d"],
+            action=s["action"],
             info=s["info"],
-            action=s.get("action", "click"),
-            type_text=s.get("type_text")
-        )
-        for s in steps_data
-    ]
+            type=step_type,
+            total_steps=s.get("total_steps", total_steps)
+        ))
+
+    return validated_steps

@@ -16,9 +16,9 @@ import threading
 from datetime import datetime
 from PIL import Image
 
-from speculation_cache import speculation_cache, StepPlan
-from speculation_planner import get_step1, get_box_only, generate_full_plan_bg
-from basic_mvp import draw_bounding_box
+from controllers.speculation_cache import speculation_cache, StepPlan
+from controllers.speculation_planner import get_step1, get_box_only, generate_full_plan_bg
+from controllers.basic_mvp import draw_bounding_box
 
 TRIAL_DIR = "/Users/user/tryroger/mouse/mac_app/swift_app/backend/trial"
 OPTIMIZED_DIR = os.path.join(TRIAL_DIR, "optimized")

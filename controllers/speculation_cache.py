@@ -26,10 +26,11 @@ import uuid
 class StepPlan:
     """A single step in the plan."""
     step_number: int
-    where: str  # UI element description
-    info: str   # Short 1-line description of action
-    action: str = "click"  # click, type, scroll, etc.
-    type_text: Optional[str] = None  # Text to type if action is "type"
+    box_2d: List[int]  # Bounding box [y0, x0, y1, x1] in 0-1000 scale
+    action: str  # User action description (3-7 words)
+    info: str  # 2 line info about the bounded box
+    type: str = "click"  # click, drag, type, scroll
+    total_steps: Optional[int] = None  # Total steps estimate
 
 
 @dataclass
@@ -184,6 +185,20 @@ class SpeculationCache:
                 return False
             self._cache[task_id].is_complete = True
             return True
+
+    def is_task_complete(self, task_id: str) -> bool:
+        """Check if a task is marked as complete."""
+        with self._lock:
+            plan = self._cache.get(task_id)
+            if plan is None:
+                return False
+            return plan.is_complete
+
+    def get_task_description(self, task_id: str) -> Optional[str]:
+        """Get the original task description."""
+        with self._lock:
+            plan = self._cache.get(task_id)
+            return plan.task if plan else None
 
     def extend_ttl(self, task_id: str, additional_seconds: int = 300) -> bool:
         """Extend the TTL for a task."""

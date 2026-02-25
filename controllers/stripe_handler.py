@@ -11,7 +11,7 @@ import os
 import stripe
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
-import user_manager
+from controllers import user_manager
 
 # Load environment variables
 load_dotenv()

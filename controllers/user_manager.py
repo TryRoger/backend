@@ -37,7 +37,9 @@ def init_firebase():
 
     # Check if path is absolute, otherwise make it relative to backend dir
     if not os.path.isabs(service_account_path):
-        service_account_path = os.path.join(os.path.dirname(__file__), service_account_path)
+        # __file__ is in controllers/, so go up one level to backend/
+        backend_dir = os.path.dirname(os.path.dirname(__file__))
+        service_account_path = os.path.join(backend_dir, service_account_path)
 
     if os.path.exists(service_account_path):
         cred = credentials.Certificate(service_account_path)
