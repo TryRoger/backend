@@ -100,7 +100,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(RequestLoggingMiddleware)
 
 # Include routers
 app.include_router(step_router)

@@ -29,21 +29,33 @@ MODEL = "gemini-3-flash-preview"
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
-def _parse_json(text: str) -> dict:
-    """Parse JSON, strip markdown fencing."""
+def _parse_json(text: str) -> Union[dict, list]:
+    """Parse JSON, strip markdown fencing. Unwrap single-element arrays."""
     t = text.strip()
     if t.startswith("```json"): t = t[7:]
     if t.startswith("```"): t = t[3:]
     if t.endswith("```"): t = t[:-3]
-    return json.loads(t.strip())
+    result = json.loads(t.strip())
+    # Model sometimes returns [{...}] instead of {...} — unwrap single-element arrays
+    if isinstance(result, list) and len(result) == 1:
+        return result[0]
+    return result
 
 
 def _img_content(img_or_url):
-    """Convert image to Gemini format."""
+    """Convert image to Gemini format (thread-safe).
+
+    PIL Images are converted to PNG bytes upfront so multiple threads
+    can safely use the result without sharing a stream.
+    """
     if isinstance(img_or_url, str):
         data = requests.get(img_or_url).content
         return types.Part.from_bytes(data=data, mime_type="image/jpeg")
-    return img_or_url
+    # PIL Image -> bytes for thread safety (avoids shared stream issues)
+    import io as _io
+    buf = _io.BytesIO()
+    img_or_url.save(buf, format="PNG")
+    return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png")
 
 
 # =============================================================================
@@ -67,7 +79,16 @@ def get_step1(img_or_url, task: str) -> Dict[str, Any]:
 Find step 1 UI element. Return JSON only:
 {{"box_2d": [y0,x0,y1,x1], "action": "user action 3-7 words" , "info": "2 line info about bounded box", "type":"click|drag|type|scroll" "total_steps": N}}
 box_2d should highlight region for visual guide with generous padding
-box_2d: 0-1000 scale, [y0,x0,y1,x1] format."""
+box_2d: 0-1000 scale, [y0,x0,y1,x1] format.
+
+IMPORTANT:
+1.Combine trivial sequential actions into ONE step. Examples:
+- "Click search bar" + "Type query" → "Click search bar and type 'query'"
+- "Scroll down" + "Click button" → "Scroll down to 'Submit' button and click it"
+- "Click dropdown" + "Select option" → "Click dropdown and select 'Option X'"
+2. box_2d coordinates must be in 0-1000 scale for most appropiate screen element visual guide.
+3. Return ONLY valid JSON array, no other text
+"""
 
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_budget=0)
@@ -80,6 +101,54 @@ box_2d: 0-1000 scale, [y0,x0,y1,x1] format."""
     )
 
     print(f"[Step1 Sync]: {response.text}")
+    return _parse_json(response.text)
+
+
+def get_next_step(img_or_url, task: str, step_number: int) -> Dict[str, Any]:
+    """
+    SYNC Step N fallback: Analyze the current screenshot and determine the
+    NEXT action the user should take to progress toward the task goal.
+
+    Used when the cached plan is stale or missing for step 2+.
+    Unlike get_step1, this is step-aware and won't restart from the beginning.
+
+    Returns:
+        {
+            "box_2d": [y0, x0, y1, x1],
+            "action": "user action 3-7 words",
+            "info": "2 line info about bounded box",
+            "type": "click|drag|type|scroll",
+            "total_steps": N
+        }
+    """
+    prompt = f"""Task: "{task}"
+The user is on step {step_number}. Look at the CURRENT screenshot and determine the NEXT action needed to progress toward the task goal.
+Do NOT restart from the beginning. Identify what should be done RIGHT NOW based on what is visible on screen.
+Return JSON only:
+{{"box_2d": [y0,x0,y1,x1], "action": "user action 3-7 words", "info": "2 line info about bounded box", "type":"click|drag|type|scroll", "total_steps": N}}
+box_2d should highlight region for visual guide with generous padding
+box_2d: 0-1000 scale, [y0,x0,y1,x1] format.
+
+IMPORTANT:
+1.Combine trivial sequential actions into ONE step. Examples:
+- "Click search bar" + "Type query" → "Click search bar and type 'query'"
+- "Scroll down" + "Click button" → "Scroll down to 'Submit' button and click it"
+- "Click dropdown" + "Select option" → "Click dropdown and select 'Option X'"
+2. box_2d coordinates must be in 0-1000 scale for most appropiate screen element visual guide.
+3. Return ONLY valid JSON array, no other text
+"""
+
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_budget=0)
+    )
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=[prompt, _img_content(img_or_url)],
+        config=config
+    )
+
+    print(f"[StepN Fallback]: {response.text}")
     return _parse_json(response.text)
 
 
@@ -192,7 +261,7 @@ def generate_full_plan_bg(
     Returns:
         List of StepPlan for steps 2 through total_steps
     """
-    prompt = f"""You are a UI automation planner. Generate a detailed step-by-step plan.
+    prompt = f"""Generate a detailed step-by-step plan.
 
 TASK: "{task}"
 TOTAL STEPS: {total_steps}
@@ -208,15 +277,20 @@ Generate steps 2 through {total_steps}. For each step, return JSON only with thi
 FIELD DESCRIPTIONS:
 - step_number: The step number (2, 3, 4, etc.)
 - box_2d: Bounding box [y0,x0,y1,x1] in 0-1000 scale for the UI element. Use generous padding.
-- action: Short description of user action (3-7 words), e.g., "Click Safari icon in dock"
+- action: Short description of user action (3-7 words)
 - info: 2 line description about the bounded box element and what it does
 - type: One of: click, drag, type, scroll
 - total_steps: Always {total_steps}
 
 IMPORTANT:
-1. Each step should be ONE atomic action
-2. box_2d coordinates must be in 0-1000 scale
-3. Return ONLY valid JSON array, no other text"""
+1.Combine trivial sequential actions into ONE step. Examples:
+- "Click search bar" + "Type query" → "Click search bar and type 'query'"
+- "Scroll down" + "Click button" → "Scroll down to 'Submit' button and click it"
+- "Click dropdown" + "Select option" → "Click dropdown and select 'Option X'"
+2. box_2d coordinates must be in 0-1000 scale for most appropiate screen element visual guide.
+3. Return ONLY valid JSON array, no other text
+
+"""
 
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_budget=0)

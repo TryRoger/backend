@@ -18,7 +18,7 @@ import PIL.Image
 
 from controllers.basic_mvp import convert_box2d_to_pixels, draw_bounding_box, ensure_trial_dir, get_timestamp, TRIAL_DIR
 from controllers.speculation_cache import speculation_cache
-from controllers.speculation_planner import get_step1, get_box_only, generate_full_plan_bg, is_task_complete
+from controllers.speculation_planner import get_step1, get_next_step, get_box_only, generate_full_plan_bg, is_task_complete
 from controllers import user_manager
 
 # =============================================================================
@@ -144,6 +144,59 @@ def _run_bg_completion_check(img, task_id: str, task: str):
         print(f"[BG] Error checking completion: {e}")
 
 
+def _run_parallel_box_and_completion(img, task_id: str, task: str, element_info: str):
+    """
+    Run get_box_only and is_task_complete in parallel.
+
+    This reduces latency for Step 2+ by running both calls simultaneously,
+    ensuring accurate is_completed status without adding an extra step.
+
+    Args:
+        img: PIL Image from current screenshot
+        task_id: Unique task identifier
+        task: The user's task description
+        element_info: Description of element to find (for get_box_only)
+
+    Returns:
+        tuple: (box_result dict, is_complete bool)
+    """
+    box_result = {}
+    is_complete = False
+
+    def get_box():
+        nonlocal box_result
+        try:
+            box_result = get_box_only(img, element_info)
+        except Exception as e:
+            print(f"[PARALLEL] get_box_only error: {e}")
+            box_result = {}
+
+    def check_complete():
+        nonlocal is_complete
+        try:
+            is_complete = is_task_complete(img, task)
+        except Exception as e:
+            print(f"[PARALLEL] is_task_complete error: {e}")
+            is_complete = False
+
+    # Start both threads
+    box_thread = threading.Thread(target=get_box)
+    complete_thread = threading.Thread(target=check_complete)
+
+    start = time.time()
+    box_thread.start()
+    complete_thread.start()
+
+    # Wait for both to finish
+    box_thread.join()
+    complete_thread.join()
+
+    elapsed = time.time() - start
+    print(f"[PARALLEL] Both calls completed in {elapsed:.3f}s")
+
+    return box_result, is_complete
+
+
 # =============================================================================
 # TASK EXECUTION ENDPOINT
 # =============================================================================
@@ -227,6 +280,7 @@ async def execute_step(
     # Read and validate image
     image_bytes = await screenshot.read()
     img = PIL.Image.open(io.BytesIO(image_bytes))
+    img.load()  # Force pixel data into memory (avoids lazy-read stream issues in threads)
     img_width, img_height = img.size
 
     # Initialize response variables
@@ -318,12 +372,15 @@ async def execute_step(
             print(f"  action: {cached_step.action}")
             print(f"  info: {cached_step.info}")
 
-            # SYNC: Just find box_2d (FAST - small prompt)
+            # PARALLEL: Run get_box_only and is_task_complete simultaneously
+            # This ensures accurate is_completed status without adding an extra step
             detection_start = time.time()
             try:
-                result = get_box_only(img, cached_step.info)
+                result, is_completed = _run_parallel_box_and_completion(
+                    img, task_id, task, cached_step.info
+                )
                 detection_end = time.time()
-                print(f"[TIMING] Box lookup: {detection_end - detection_start:.3f} seconds")
+                print(f"[TIMING] Parallel box+completion: {detection_end - detection_start:.3f}s")
 
                 box_2d = result.get("box_2d", [])
 
@@ -335,11 +392,12 @@ async def execute_step(
                 response_info = cached_step.info
                 response_type = cached_step.type
 
-                # Note: is_completed is determined by background is_task_complete check,
-                # not by step count. The check runs after each step and marks cache.
-                # Next request will detect completion via speculation_cache.is_task_complete()
+                # Mark task complete in cache if detected
+                if is_completed and task_id:
+                    speculation_cache.mark_complete(task_id)
+                    print(f"[PARALLEL] Task {task_id} marked as COMPLETE")
 
-                # Build next_step from cache, or calculate if not available
+                # Build next_step from cache only (no sync fallback to avoid latency)
                 next_cached_step = speculation_cache.get_step(task_id, step_number + 1)
                 if next_cached_step:
                     next_step = NextStep(
@@ -348,33 +406,19 @@ async def execute_step(
                         info=next_cached_step.info,
                         type=next_cached_step.type
                     )
-                else:
-                    # Cache miss for next step - calculate from current screenshot
-                    print(f"[CACHE MISS] Next step {step_number + 1} not in cache, calculating...")
-                    try:
-                        next_result = get_step1(img, task)
-                        next_step = NextStep(
-                            box_2d=next_result.get("box_2d", []),
-                            action=next_result.get("action", ""),
-                            info=next_result.get("info", ""),
-                            type=next_result.get("type", "click")
-                        )
-                        print(f"[CALCULATED] Next step: {next_step.action}")
-                    except Exception as e:
-                        print(f"[ERROR] Failed to calculate next step: {e}")
-                        next_step = None
+                # No fallback - if next step not in cache, next_step stays None
 
             except Exception as e:
                 print(f"[ERROR] Cache lookup failed: {e}")
                 print("[FALLBACK] Running full analysis...")
                 cached_step = None  # Trigger fallback below
 
-        # FALLBACK: Cache miss or element not found - run full analysis
+        # FALLBACK: Cache miss or element not found - run step-aware analysis
         if not cached_step:
-            print(f"[CACHE MISS] Step {step_number} not in cache - running fallback...")
+            print(f"[CACHE MISS] Step {step_number} not in cache - running step-aware fallback...")
 
             detection_start = time.time()
-            result_fallback = get_step1(img, task)
+            result_fallback = get_next_step(img, task, step_number)
             detection_end = time.time()
             print(f"[TIMING] Fallback detection: {detection_end - detection_start:.3f} seconds")
 
@@ -431,16 +475,16 @@ async def execute_step(
         user_manager.record_task(user_uuid, task)
         print(f"[USER] Incremented task count for user {user_uuid}")
 
-    # BACKGROUND: Launch task completion check
-    # This runs in parallel while user performs current step action
-    if response_task_id and not is_completed:
+    # BACKGROUND: Launch task completion check (Step 1 only)
+    # Step 2+ checks completion in parallel with get_box_only, so no need here
+    if response_task_id and not is_completed and step_number == 1:
         completion_thread = threading.Thread(
             target=_run_bg_completion_check,
             args=(img, response_task_id, task),
             daemon=True
         )
         completion_thread.start()
-        print("[BG] Background completion check started")
+        print("[BG] Background completion check started (Step 1 only)")
 
     # Build response
     response = ExecuteStepResponse(
