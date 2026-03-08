@@ -17,10 +17,12 @@ Usage:
 """
 
 import json
+import os
 import time
 import datetime
 
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from dotenv import load_dotenv
@@ -105,6 +107,21 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 app.include_router(step_router)
 app.include_router(user_router)
 app.include_router(payments_router)
+
+
+DMG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RogerAI.dmg")
+
+
+@app.get("/download")
+async def download_dmg():
+    """Serve RogerAI.dmg for download."""
+    if not os.path.exists(DMG_PATH):
+        return {"error": "DMG file not found"}, 404
+    return FileResponse(
+        path=DMG_PATH,
+        filename="RogerAI.dmg",
+        media_type="application/octet-stream",
+    )
 
 
 @app.get("/health")
