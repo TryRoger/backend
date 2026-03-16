@@ -20,8 +20,9 @@ import json
 import os
 import time
 import datetime
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -34,26 +35,31 @@ from routes.step import router as step_router
 from routes.user import router as user_router
 from routes.payments import router as payments_router
 
+#Import Copilot
+from controllers.copilot import handle_ws_stream
 # Load environment variables
 load_dotenv()
 
 # Server startup time for uptime tracking
 SERVER_START_TIME = time.time()
 
-app = FastAPI(
-    title="Screen Element Detection & Guidance API",
-    description="Detects UI elements and provides step-by-step guidance using Gemini",
-    version="1.0.0"
-)
 
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app):
     """Pre-initialize caches on server startup for faster first requests."""
     try:
         stripe_handler.initialize_stripe_cache()
     except Exception as e:
         print(f"[STARTUP] Warning: Could not initialize Stripe cache: {e}")
+    yield
+
+
+app = FastAPI(
+    title="Screen Element Detection & Guidance API",
+    description="Detects UI elements and provides step-by-step guidance using Gemini",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -137,7 +143,12 @@ async def health_check():
     }
 
 
+@app.websocket("/ws/stream")
+async def ws_stream(websocket: WebSocket):
+    await handle_ws_stream(websocket)
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
 
