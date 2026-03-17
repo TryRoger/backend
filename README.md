@@ -1,9 +1,17 @@
 # Roger AI Backend Architechture
 
 We are using parallel fast agents for our small crucial work and one roger agent to manage all of that. It was a constant battle between intelligence and speed. 
-The Roger Agent, 
-Roger agent is responsible for generating the steps and plan, mantaining current state of task, and getting the latest context for spefic software. This is the fundamental agent. 
 
+### The Roger Agent, 
+
+Roger agent is responsible for 
+1. Generating the steps and plan
+2. mantaining current state of task,
+3. getting the latest context for spefic software. (grounding based on 4.) 
+
+It can have two modes flash and pro. 
+
+### Parallel Flash agents. 
 We also have parallel flash agents, 
 1. Box2D Agents - It is reponsible for giving box_2d array which tells where to draw the bounding box.
 2. Feedback Agent - If the user has gone to another webpage (like youtube) it asks it come back to the task / or gives motivation if he is going right.
