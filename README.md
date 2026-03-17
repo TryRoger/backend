@@ -40,3 +40,20 @@ Inputs are with increasing order of priority
 
 This reduces the screenshots to very few numbers and are primarily used to community user activity to roger agent and feedback agents. 
 <img width="1440" height="1102" alt="image" src="https://github.com/user-attachments/assets/359c4112-d726-4157-84ec-560ffa5dddf6" />
+
+
+It is audio enabled and language agnostic 
+https://github.com/TryRoger/backend/blob/23024d03e87e789b987d2cdc5976014511de3d14/controllers/copilot.py#L149
+
+Task Agents 
+https://github.com/TryRoger/backend/blob/main/controllers/v2/task_agents.py
+
+FeedBack Agent 
+https://github.com/TryRoger/backend/blob/main/controllers/v2/step_figure_agent.py
+
+Roger Agent 
+https://github.com/TryRoger/backend/blob/main/controllers/v2/roger_agent.py
+
+Flow 
+https://github.com/TryRoger/backend/blob/main/controllers/copilot.py
+
