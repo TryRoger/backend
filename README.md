@@ -1,4 +1,4 @@
-## Roger AI Backend Architechture
+# Roger AI Backend Architechture
 
 We are using parallel fast agents for our small crucial work and one roger agent to manage all of that. It was a constant battle between intelligence and speed. 
 The Roger Agent, 
